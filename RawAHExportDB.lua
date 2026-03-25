@@ -84,16 +84,49 @@ local function NewScanContainer()
     itemSummary = {},
     itemSummaryCount = 0,
     topUntracked = {},
+    unknownRowCount = 0,
   }
+end
+
+local function ExtractItemIDFromLink(link)
+  if not link then
+    return nil
+  end
+
+  local itemID = link:match("item:(%d+)")
+  if itemID then
+    return tonumber(itemID)
+  end
+
+  return nil
 end
 
 local function ReadAuctionRow(index)
   local name, texture, count, quality, canUse, level, levelColHeader, minBid, minIncrement,
-    buyoutPrice, bidAmount, highBidder, owner, ownerFullName, saleStatus, itemId,
+    buyoutPrice, bidAmount, highBidder, bidderFullName, owner, ownerFullName, saleStatus, itemId,
     hasAllInfo = GetAuctionItemInfo("list", index)
 
   local link = GetAuctionItemLink("list", index)
   local timeLeft = GetAuctionItemTimeLeft("list", index)
+
+  local derivedItemID = ExtractItemIDFromLink(link)
+  if derivedItemID then
+    itemId = derivedItemID
+  end
+
+  if itemId == 0 then
+    itemId = nil
+  end
+
+  if not name or name == "" then
+    local itemNameFromCache = nil
+    if link then
+      itemNameFromCache = GetItemInfo(link)
+    end
+    if itemNameFromCache then
+      name = itemNameFromCache
+    end
+  end
 
   return {
     index = index,
@@ -111,6 +144,7 @@ local function ReadAuctionRow(index)
     buyoutPrice = buyoutPrice,
     bidAmount = bidAmount,
     highBidder = highBidder,
+    bidderFullName = bidderFullName,
     owner = owner,
     ownerFullName = ownerFullName,
     saleStatus = saleStatus,
@@ -128,7 +162,7 @@ local function UpdateItemSummary(scan, row)
   if not summary then
     summary = {
       itemID = row.itemID,
-      name = row.name,
+      name = row.name or ("item:" .. tostring(row.itemID)),
       auctionCount = 0,
       totalQuantity = 0,
       minBuyout = nil,
@@ -139,7 +173,7 @@ local function UpdateItemSummary(scan, row)
     scan.itemSummary[row.itemID] = summary
   end
 
-  if row.name and not summary.name then
+  if row.name and row.name ~= "" and (not summary.name or summary.name == "") then
     summary.name = row.name
   end
 
@@ -223,6 +257,7 @@ local function FinalizeScan()
   RAW_AH_EXPORT_DB.meta.lastFilteredRowCount = Exporter.currentScan.filteredRowCount
   RAW_AH_EXPORT_DB.meta.lastItemSummaryCount = Exporter.currentScan.itemSummaryCount
   RAW_AH_EXPORT_DB.meta.lastTrackedItemCount = Exporter.currentScan.trackedItemCount
+  RAW_AH_EXPORT_DB.meta.lastUnknownRowCount = Exporter.currentScan.unknownRowCount
 
   Debug(
     "Scan complete. Saved "
@@ -244,12 +279,24 @@ local function BuildScanFromAuctionList()
 
   for index = 1, (batch or 0) do
     local row = ReadAuctionRow(index)
-    UpdateItemSummary(Exporter.currentScan, row)
-    StoreFilteredRow(Exporter.currentScan, row)
-    ReportProgress(index, batch)
+
+    if not row.itemID then
+      Exporter.currentScan.unknownRowCount = Exporter.currentScan.unknownRowCount + 1
+    else
+      UpdateItemSummary(Exporter.currentScan, row)
+      StoreFilteredRow(Exporter.currentScan, row)
+    end
   end
 
-  Debug("Auction list batch size: " .. tostring(batch or 0) .. ", total: " .. tostring(total or 0))
+  Debug(
+    "Auction list batch size: "
+      .. tostring(batch or 0)
+      .. ", total: "
+      .. tostring(total or 0)
+      .. ", unidentified rows: "
+      .. tostring(Exporter.currentScan.unknownRowCount or 0)
+  )
+
   FinalizeScan()
 end
 

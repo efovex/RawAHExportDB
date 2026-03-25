@@ -3,4 +3,4 @@
 ## Notes: Full AH scan with tracked-item export and compact summaries
 ## Author: OpenAI
 ## Version: 0.1.0
-## SavedVariables: RAW_AH_EXPORT_DB
+## SavedVariables: RawAHExportDBData

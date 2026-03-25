@@ -21,6 +21,28 @@ local function Debug(msg)
   frame:AddMessage("|cff33ff99RawAHExport|r: " .. tostring(msg), 0.2, 1.0, 0.6)
 end
 
+local function ResolveItemName(row)
+  if row and row.name and row.name ~= "" then
+    return row.name
+  end
+
+  if row and row.link then
+    local itemNameFromLink = GetItemInfo(row.link)
+    if itemNameFromLink and itemNameFromLink ~= "" then
+      return itemNameFromLink
+    end
+  end
+
+  if row and row.itemID then
+    local itemNameFromID = GetItemInfo(row.itemID)
+    if itemNameFromID and itemNameFromID ~= "" then
+      return itemNameFromID
+    end
+  end
+
+  return nil
+end
+
 local function EnsureDB()
   RAW_AH_EXPORT_DB = RAW_AH_EXPORT_DB or {}
   RAW_AH_EXPORT_DB.version = 1
@@ -101,6 +123,37 @@ local function ExtractItemIDFromLink(link)
   return nil
 end
 
+local function PrintTopUntracked(limit)
+  EnsureDB()
+
+  local latestScan = RAW_AH_EXPORT_DB and RAW_AH_EXPORT_DB.scans and RAW_AH_EXPORT_DB.scans[1]
+  if not latestScan then
+    Debug("No scan data available.")
+    return
+  end
+
+  if not latestScan.topUntracked or #latestScan.topUntracked == 0 then
+    Debug("No top untracked items available.")
+    return
+  end
+
+  local maxCount = math.min(limit or 20, #latestScan.topUntracked)
+
+  Debug("Top untracked items:")
+  for i = 1, maxCount do
+    local row = latestScan.topUntracked[i]
+    Debug(
+      i
+        .. ". volume="
+        .. tostring(row.totalQuantity or 0)
+        .. " | id="
+        .. tostring(row.itemID or 0)
+        .. " | name="
+        .. tostring(row.name or "Unknown")
+    )
+  end
+end
+
 local function ReadAuctionRow(index)
   local name, texture, count, quality, canUse, level, levelColHeader, minBid, minIncrement,
     buyoutPrice, bidAmount, highBidder, bidderFullName, owner, ownerFullName, saleStatus, itemId,
@@ -158,11 +211,13 @@ local function UpdateItemSummary(scan, row)
     return
   end
 
+  local resolvedName = ResolveItemName(row)
+
   local summary = scan.itemSummary[row.itemID]
   if not summary then
     summary = {
       itemID = row.itemID,
-      name = row.name or ("item:" .. tostring(row.itemID)),
+      name = resolvedName or ("item:" .. tostring(row.itemID)),
       auctionCount = 0,
       totalQuantity = 0,
       minBuyout = nil,
@@ -173,8 +228,8 @@ local function UpdateItemSummary(scan, row)
     scan.itemSummary[row.itemID] = summary
   end
 
-  if row.name and row.name ~= "" and (not summary.name or summary.name == "") then
-    summary.name = row.name
+  if resolvedName and resolvedName ~= "" then
+    summary.name = resolvedName
   end
 
   summary.auctionCount = summary.auctionCount + 1
@@ -204,9 +259,17 @@ local function BuildTopUntracked(scan, limit)
 
   for _, summary in pairs(scan.itemSummary) do
     if not summary.isTracked then
+      local resolvedName = summary.name
+      if not resolvedName or resolvedName == "" or resolvedName:match("^item:") then
+        local itemName = GetItemInfo(summary.itemID)
+        if itemName and itemName ~= "" then
+          resolvedName = itemName
+        end
+      end
+
       temp[#temp + 1] = {
         itemID = summary.itemID,
-        name = summary.name,
+        name = resolvedName or ("item:" .. tostring(summary.itemID)),
         auctionCount = summary.auctionCount,
         totalQuantity = summary.totalQuantity,
         minBuyout = summary.minBuyout,
@@ -394,10 +457,12 @@ SlashCmdList["RAWAHEXPORT"] = function(msg)
     PrintStatus()
   elseif msg == "tracked" then
     PrintTrackedItems()
+  elseif msg == "top" then
+    PrintTopUntracked(20)
   elseif msg == "reset" then
     WipeScans()
   else
-    Debug("Commands: /rahexport scan | status | tracked | reset")
+    Debug("Commands: /rahexport scan | status | tracked | top | reset")
   end
 end
 

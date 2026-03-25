@@ -10,8 +10,7 @@ local TRACKED_ITEMS = {
 }
 
 local Exporter = {
-  waitingForReplicate = false,
-  pendingContinuables = 0,
+  waitingForQuery = false,
   currentScan = nil,
   requestedAt = nil,
 }
@@ -20,17 +19,17 @@ local function Debug(msg)
   DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99RawAHExport|r: " .. tostring(msg))
 end
 
-local function GetRealmKey()
-  local realm = GetRealmName() or "UnknownRealm"
-  local faction = UnitFactionGroup("player") or "Neutral"
-  return realm .. "-" .. faction
-end
-
 local function EnsureDB()
   RAW_AH_EXPORT_DB = RAW_AH_EXPORT_DB or {}
   RAW_AH_EXPORT_DB.version = 1
   RAW_AH_EXPORT_DB.scans = RAW_AH_EXPORT_DB.scans or {}
   RAW_AH_EXPORT_DB.meta = RAW_AH_EXPORT_DB.meta or {}
+end
+
+local function GetRealmKey()
+  local realm = GetRealmName() or "UnknownRealm"
+  local faction = UnitFactionGroup("player") or "Neutral"
+  return realm .. "-" .. faction
 end
 
 local function IsTrackedItem(itemID)
@@ -47,12 +46,10 @@ end
 
 local function NewScanContainer()
   local now = time()
-  local realmKey = GetRealmKey()
-
   return {
     scannedAtEpoch = now,
     scannedAtText = date("!%Y-%m-%dT%H:%M:%SZ", now),
-    realmKey = realmKey,
+    realmKey = GetRealmKey(),
     realmName = GetRealmName(),
     faction = UnitFactionGroup("player"),
     player = UnitName("player"),
@@ -68,58 +65,34 @@ local function NewScanContainer()
 end
 
 local function ReadAuctionRow(index)
-  local name,
-    texture,
-    count,
-    qualityID,
-    usable,
-    level,
-    levelType,
-    minBid,
-    minIncrement,
-    buyoutPrice,
-    bidAmount,
-    highBidder,
-    bidderFullName,
-    owner,
-    ownerFullName,
-    saleStatus,
-    itemID,
-    hasAllInfo = C_AuctionHouse.GetReplicateItemInfo(index)
+  local name, texture, count, quality, canUse, level, levelColHeader, minBid, minIncrement,
+    buyoutPrice, bidAmount, highBidder, owner, ownerFullName, saleStatus, itemId,
+    hasAllInfo = GetAuctionItemInfo("list", index)
 
-  local timeLeft = nil
-  if C_AuctionHouse.GetReplicateItemTimeLeft then
-    timeLeft = C_AuctionHouse.GetReplicateItemTimeLeft(index)
-  end
-
-  local petSpeciesID, petDisplayID = nil, nil
-  if C_AuctionHouse.GetReplicateItemBattlePetInfo then
-    petSpeciesID, petDisplayID = C_AuctionHouse.GetReplicateItemBattlePetInfo(index)
-  end
+  local link = GetAuctionItemLink("list", index)
+  local timeLeft = GetAuctionItemTimeLeft("list", index)
 
   return {
     index = index,
-    itemID = itemID,
+    itemID = itemId,
     name = name,
+    link = link,
     texture = texture,
     count = count,
-    qualityID = qualityID,
-    usable = usable,
+    qualityID = quality,
+    usable = canUse,
     level = level,
-    levelType = levelType,
+    levelType = levelColHeader,
     minBid = minBid,
     minIncrement = minIncrement,
     buyoutPrice = buyoutPrice,
     bidAmount = bidAmount,
     highBidder = highBidder,
-    bidderFullName = bidderFullName,
     owner = owner,
     ownerFullName = ownerFullName,
     saleStatus = saleStatus,
     hasAllInfo = hasAllInfo,
     timeLeft = timeLeft,
-    petSpeciesID = petSpeciesID,
-    petDisplayID = petDisplayID,
   }
 end
 
@@ -218,10 +191,10 @@ local function FinalizeScan()
   Exporter.currentScan.itemSummaryCount = summaryCount
 
   BuildTopUntracked(Exporter.currentScan, 100)
-
   Exporter.currentScan.completed = true
 
   table.insert(RAW_AH_EXPORT_DB.scans, 1, Exporter.currentScan)
+
   RAW_AH_EXPORT_DB.meta.lastScanAt = Exporter.currentScan.scannedAtEpoch
   RAW_AH_EXPORT_DB.meta.lastScanRealm = Exporter.currentScan.realmKey
   RAW_AH_EXPORT_DB.meta.lastFilteredRowCount = Exporter.currentScan.filteredRowCount
@@ -237,87 +210,47 @@ local function FinalizeScan()
   )
 
   Exporter.currentScan = nil
-  Exporter.waitingForReplicate = false
-  Exporter.pendingContinuables = 0
+  Exporter.waitingForQuery = false
 end
 
-local function MaybeFinalizeScan()
-  if Exporter.pendingContinuables == 0 then
-    FinalizeScan()
-  end
-end
-
-local function RefreshRowAfterItemLoad(index)
-  if not Exporter.currentScan then
-    return
-  end
-
-  local row = ReadAuctionRow(index)
-  UpdateItemSummary(Exporter.currentScan, row)
-  StoreFilteredRow(Exporter.currentScan, row)
-end
-
-local function QueueItemRefresh(index, itemID)
-  if not itemID or not Item or not Item.CreateFromItemID then
-    return
-  end
-
-  local item = Item:CreateFromItemID(itemID)
-  if not item or not item.ContinueOnItemLoad then
-    return
-  end
-
-  Exporter.pendingContinuables = Exporter.pendingContinuables + 1
-
-  item:ContinueOnItemLoad(function()
-    RefreshRowAfterItemLoad(index)
-    Exporter.pendingContinuables = Exporter.pendingContinuables - 1
-    MaybeFinalizeScan()
-  end)
-end
-
-local function BuildScanFromReplicate()
-  local total = C_AuctionHouse.GetNumReplicateItems() or 0
-
+local function BuildScanFromAuctionList()
+  local batch, total = GetNumAuctionItems("list")
   Exporter.currentScan = NewScanContainer()
-  Exporter.pendingContinuables = 0
 
-  for index = 0, total - 1 do
+  for index = 1, (batch or 0) do
     local row = ReadAuctionRow(index)
-
     UpdateItemSummary(Exporter.currentScan, row)
     StoreFilteredRow(Exporter.currentScan, row)
-
-    if row.itemID and row.hasAllInfo == false then
-      QueueItemRefresh(index, row.itemID)
-    end
   end
 
-  if Exporter.pendingContinuables == 0 then
-    FinalizeScan()
-  else
-    Debug("Replicate received. Waiting for " .. Exporter.pendingContinuables .. " item loads before finalizing.")
-  end
+  Debug("Auction list batch size: " .. tostring(batch or 0) .. ", total: " .. tostring(total or 0))
+  FinalizeScan()
 end
 
 local function StartFullScan()
-  if not AuctionHouseFrame or not AuctionHouseFrame:IsShown() then
-    Debug("Open the Auction House first.")
+  if not QueryAuctionItems or not CanSendAuctionQuery then
+    Debug("Classic Auction House API is not available.")
     return
   end
 
-  if Exporter.waitingForReplicate then
+  if Exporter.waitingForQuery then
     Debug("A scan is already in progress.")
+    return
+  end
+
+  local canQuery, canQueryAll = CanSendAuctionQuery()
+  if not canQueryAll then
+    Debug("Full scan is not ready yet. Wait for the getAll cooldown.")
     return
   end
 
   EnsureDB()
 
-  Exporter.waitingForReplicate = true
+  Exporter.waitingForQuery = true
   Exporter.requestedAt = time()
 
-  Debug("Requesting full replicate scan...")
-  C_AuctionHouse.ReplicateItems()
+  Debug("Requesting full getAll scan...")
+  QueryAuctionItems("", nil, nil, 0, false, nil, true, false, nil)
 end
 
 local function WipeScans()
@@ -352,7 +285,7 @@ local function PrintStatus()
     Debug("Stored scans: " .. scanCount .. ". No completed scans yet.")
   end
 
-  if Exporter.waitingForReplicate then
+  if Exporter.waitingForQuery then
     Debug("A scan request is currently in progress.")
   end
 end
@@ -395,7 +328,7 @@ SlashCmdList["RAWAHEXPORT"] = function(msg)
 end
 
 FRAME:RegisterEvent("ADDON_LOADED")
-FRAME:RegisterEvent("REPLICATE_ITEM_LIST_UPDATE")
+FRAME:RegisterEvent("AUCTION_ITEM_LIST_UPDATE")
 
 FRAME:SetScript("OnEvent", function(_, event, arg1)
   if event == "ADDON_LOADED" and arg1 == ADDON_NAME then
@@ -404,12 +337,12 @@ FRAME:SetScript("OnEvent", function(_, event, arg1)
     return
   end
 
-  if event == "REPLICATE_ITEM_LIST_UPDATE" then
-    if not Exporter.waitingForReplicate then
+  if event == "AUCTION_ITEM_LIST_UPDATE" then
+    if not Exporter.waitingForQuery then
       return
     end
 
-    Debug("Replicate update received. Reading raw auction rows...")
-    BuildScanFromReplicate()
+    Debug("Auction list update received. Reading auction rows...")
+    BuildScanFromAuctionList()
   end
 end)

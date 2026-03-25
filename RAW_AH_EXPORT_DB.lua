@@ -13,6 +13,7 @@ local Exporter = {
   waitingForQuery = false,
   currentScan = nil,
   requestedAt = nil,
+  lastProgressPercent = 0,
 }
 
 local function Debug(msg)
@@ -30,6 +31,27 @@ local function GetRealmKey()
   local realm = GetRealmName() or "UnknownRealm"
   local faction = UnitFactionGroup("player") or "Neutral"
   return realm .. "-" .. faction
+end
+
+local function ResetProgress()
+  Exporter.lastProgressPercent = 0
+end
+
+local function ReportProgress(current, total)
+  if not total or total <= 0 then
+    return
+  end
+
+  local percent = math.floor((current / total) * 100)
+
+  local milestones = { 10, 25, 50, 75, 90, 100 }
+  for i = 1, #milestones do
+    local milestone = milestones[i]
+    if percent >= milestone and Exporter.lastProgressPercent < milestone then
+      Exporter.lastProgressPercent = milestone
+      Debug("Scan progress: " .. milestone .. "% (" .. current .. "/" .. total .. ")")
+    end
+  end
 end
 
 local function IsTrackedItem(itemID)
@@ -217,10 +239,13 @@ local function BuildScanFromAuctionList()
   local batch, total = GetNumAuctionItems("list")
   Exporter.currentScan = NewScanContainer()
 
+  Debug("Processing " .. tostring(batch or 0) .. " auction rows...")
+
   for index = 1, (batch or 0) do
     local row = ReadAuctionRow(index)
     UpdateItemSummary(Exporter.currentScan, row)
     StoreFilteredRow(Exporter.currentScan, row)
+    ReportProgress(index, batch)
   end
 
   Debug("Auction list batch size: " .. tostring(batch or 0) .. ", total: " .. tostring(total or 0))
@@ -248,6 +273,7 @@ local function StartFullScan()
 
   Exporter.waitingForQuery = true
   Exporter.requestedAt = time()
+  ResetProgress()
 
   Debug("Requesting full getAll scan...")
   QueryAuctionItems("", nil, nil, 0, false, nil, true, false, nil)

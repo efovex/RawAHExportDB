@@ -17,7 +17,8 @@ local Exporter = {
 }
 
 local function Debug(msg)
-  DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99RawAHExport|r: " .. tostring(msg))
+  local frame = SELECTED_CHAT_FRAME or DEFAULT_CHAT_FRAME
+  frame:AddMessage("|cff33ff99RawAHExport|r: " .. tostring(msg), 0.2, 1.0, 0.6)
 end
 
 local function EnsureDB()
